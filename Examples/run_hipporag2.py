@@ -1,28 +1,43 @@
 import os
+import sys
 import asyncio
 import argparse
 import json
 import logging
 from typing import Dict, List
-from dotenv import load_dotenv
 from pathlib import Path
+
+import multiprocessing as mp
+
+from dotenv import load_dotenv
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from tqdm import tqdm
 
-# Load environment variables
+# make repo root importable when running as a script
+ROOT = Path(__file__).resolve().parents[1]  
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# on mac force fork before hipporag imports multiprocessing
+if __name__ == "__main__":
+    try:
+        mp.set_start_method("fork")
+    except RuntimeError:
+    
+        pass
+
 load_dotenv()
 
-# Set CUDA device
 os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
-# Import HippoRAG components after setting environment
 from hipporag.HippoRAG import HippoRAG
 from hipporag.utils.misc_utils import string_to_bool
 from hipporag.utils.config_utils import BaseConfig
 from Evaluation.llm.ollama_client import OllamaClient, OllamaWrapper
 
-# Configure logging
+
+# configure logging
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -82,12 +97,12 @@ def process_corpus(
     """Process a single corpus: index it and answer its questions"""
     logging.info(f"📚 Processing corpus: {corpus_name}")
     
-    # Prepare output directory
+    # prepare output directory
     output_dir = f"./results/hipporag2/{corpus_name}"
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, f"predictions_{corpus_name}.json")
     
-    # Initialize tokenizer for text splitting
+    # initialize tokenizer for text splitting
     try:
         tokenizer = AutoTokenizer.from_pretrained(embed_model_path)
         logging.info(f"✅ Loaded tokenizer: {embed_model_path}")
@@ -95,30 +110,30 @@ def process_corpus(
         logging.error(f"❌ Failed to load tokenizer: {e}")
         return
     
-    # Split text into chunks
+    # split text into chunks
     chunks = split_text(context, tokenizer)
     logging.info(f"✂️ Split corpus into {len(chunks)} chunks")
     
-    # Format chunks as documents
+    # format chunks as documents
     docs = [f'{idx}:{chunk}' for idx, chunk in enumerate(chunks)]
     
-    # Get questions for this corpus
+    # get questions for this corpus
     corpus_questions = questions.get(corpus_name, [])
     if not corpus_questions:
         logging.warning(f"⚠️ No questions found for corpus: {corpus_name}")
         return
     
-    # Sample questions if requested
+    # sample questions if requested
     if sample and sample < len(corpus_questions):
         corpus_questions = corpus_questions[:sample]
     
     logging.info(f"🔍 Found {len(corpus_questions)} questions for {corpus_name}")
     
-    # Prepare queries and gold answers
+    # prepare queries and gold answers
     all_queries = [q["question"] for q in corpus_questions]
     gold_answers = [[q['answer']] for q in corpus_questions]
     
-    # Configure HippoRAG
+    # configure HippoRAG
     config = BaseConfig(
         save_dir=os.path.join(base_dir, corpus_name),
         llm_base_url=llm_base_url,
@@ -138,7 +153,7 @@ def process_corpus(
         openie_mode="online"
     )
     
-    # Override LLM configuration for Ollama mode
+    # override LLM configuration for Ollama mode
     if mode == "ollama":
         config.llm_mode = "ollama"
         logging.info(f"✅ Using Ollama mode: {model_name} at {llm_base_url}")
@@ -146,14 +161,14 @@ def process_corpus(
         config.llm_mode = "openai"
         logging.info(f"✅ Using OpenAI mode: {model_name} at {llm_base_url}")
     
-    # Initialize HippoRAG
+    # initialize HippoRAG
     hipporag = HippoRAG(global_config=config)
     
-    # Index the corpus content
+    # index the corpus content
     hipporag.index(docs)
     logging.info(f"✅ Indexed corpus: {corpus_name}")
     
-    # Process questions
+    # process questions
     results = []
 
     queries_solutions, _, _, _, _ = hipporag.rag_qa(queries=all_queries, gold_docs=None, gold_answers=gold_answers)
@@ -173,14 +188,14 @@ def process_corpus(
                 "ground_truth": question.get("answer", "")
             })
     
-    # Save results
+    # save results
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
     
     logging.info(f"💾 Saved {len(results)} predictions to: {output_path}")
 
 def main():
-    # Define subset paths
+    # define subset paths
     SUBSET_PATHS = {
         "medical": {
             "corpus": "./Datasets/Corpus/medical.parquet",
@@ -194,13 +209,13 @@ def main():
     
     parser = argparse.ArgumentParser(description="HippoRAG: Process Corpora and Answer Questions")
     
-    # Core arguments
+    # core arguments
     parser.add_argument("--subset", required=True, choices=["medical", "novel"], 
                         help="Subset to process (medical or novel)")
     parser.add_argument("--base_dir", default="./hipporag2_workspace", 
                         help="Base working directory for HippoRAG")
     
-    # Model configuration
+    # model configuration
     parser.add_argument("--mode", choices=["API", "ollama"], default="API",
                         help="Use API or ollama for LLM")
     parser.add_argument("--model_name", default="gpt-4o-mini", 
@@ -220,7 +235,7 @@ def main():
     
     logging.info(f"🚀 Starting HippoRAG processing for subset: {args.subset}")
     
-    # Validate subset
+    # validate subset
     if args.subset not in SUBSET_PATHS:
         logging.error(f"❌ Invalid subset: {args.subset}. Valid options: {list(SUBSET_PATHS.keys())}")
         return
@@ -229,7 +244,7 @@ def main():
     corpus_path = SUBSET_PATHS[args.subset]["corpus"]
     questions_path = SUBSET_PATHS[args.subset]["questions"]
     
-    # Handle API key security
+    # API key security
     api_key = args.llm_api_key or os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         logging.warning("⚠️ No API key provided! Requests may fail.")
@@ -251,11 +266,11 @@ def main():
         logging.error(f"❌ Failed to load corpus: {e}")
         return
     
-    # Sample corpus data if requested
+    # sample corpus data if requested
     if args.sample:
         corpus_data = corpus_data[:1]
     
-    # Load question data
+    # load question data
     try:
         questions_dataset = load_dataset("parquet", data_files=questions_path, split="train")
         question_data = []
@@ -274,7 +289,7 @@ def main():
         logging.error(f"❌ Failed to load questions: {e}")
         return
     
-    # Process each corpus concurrently using asyncio + threads
+    # process each corpus concurrently
     async def _run_all():
         tasks = []
         for item in corpus_data:
@@ -300,3 +315,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
