@@ -191,7 +191,7 @@ async def main(args: argparse.Namespace):
 
     # Load evaluation data
     print(f"Loading evaluation data from {args.data_file}...")
-    with open(args.data_file, 'r') as f:
+    with open(args.data_file, 'r', encoding='utf-8') as f:
         file_data = json.load(f)  # Now a list of question items
     
     # Define the evaluation metrics for each question type
@@ -228,8 +228,33 @@ async def main(args: argparse.Namespace):
         ids = [item['id'] for item in group_items]
         questions = [item['question'] for item in group_items]
         ground_truths = [item['ground_truth'] for item in group_items]
-        answers = [item['generated_answer'] for item in group_items]
-        contexts = [item['context'] for item in group_items]
+        answers = [
+            item.get("generated_answer") 
+            or item.get("answer") 
+            or "" 
+            for item in group_items
+        ]
+
+        # Extract contexts from any format (context / contexts / data->chunks->content)
+        def extract_contexts(item):
+            # case 1: context exists
+            if "context" in item and isinstance(item["context"], list):
+                return item["context"]
+            # case 2: contexts exists
+            if "contexts" in item and isinstance(item["contexts"], list):
+                return item["contexts"]
+            # case 3: LightRAG nested format
+            if "data" in item and isinstance(item["data"], dict):
+                chunks = item["data"].get("chunks", [])
+                if isinstance(chunks, list):
+                    return [
+                        c.get("content", "")
+                        for c in chunks
+                        if isinstance(c, dict) and "content" in c
+                    ]
+            return []
+
+        contexts = [extract_contexts(item) for item in group_items]
         
         # Create dataset
         data = {
